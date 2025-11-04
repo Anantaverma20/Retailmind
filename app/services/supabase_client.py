@@ -10,6 +10,17 @@ _supabase_client: Optional[Client] = None
 def get_supabase_client() -> Client:
     """Get or create Supabase client singleton."""
     global _supabase_client
+    
+    # Validate settings before use
+    if hasattr(settings, 'validate_required'):
+        settings.validate_required()
+    
+    if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
+        raise ValueError(
+            "SUPABASE_URL and SUPABASE_KEY environment variables are required. "
+            "Please set them in your Vercel project settings."
+        )
+    
     if _supabase_client is None:
         _supabase_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
     return _supabase_client

@@ -102,15 +102,55 @@ def rate_limit_decorator():
 # Authentication dependency
 async def verify_omi_token(x_omi_token: str = Header(None)):
     """Verify OMI webhook token."""
+    # Validate settings before use
+    if hasattr(settings, 'validate_required'):
+        try:
+            settings.validate_required()
+        except ValueError as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Configuration error: {str(e)}. Please check environment variables."
+            )
+    
+    if not settings.OMI_WEBHOOK_TOKEN:
+        raise HTTPException(
+            status_code=500,
+            detail="OMI_WEBHOOK_TOKEN environment variable is required. Please set it in Vercel settings."
+        )
+    
     if not x_omi_token or x_omi_token != settings.OMI_WEBHOOK_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid or missing OMI token")
     return x_omi_token
+
+
+@app.get("/")
+async def root():
+    """Root endpoint - provides helpful information."""
+    return {
+        "service": "OMI Voice Inventory Assistant",
+        "status": "running",
+        "version": "1.0.0",
+        "endpoints": {
+            "health": "/health",
+            "omi_webhook": "/omi/event",
+            "api_docs": "/docs"
+        },
+        "note": "Set environment variables in Vercel dashboard if you see errors"
+    }
 
 
 @app.get("/health")
 async def health():
     """Health check endpoint."""
     return {"ok": True}
+
+
+@app.get("/favicon.ico")
+@app.get("/favicon.png")
+async def favicon():
+    """Favicon handler - return 204 No Content."""
+    from fastapi.responses import Response
+    return Response(status_code=204)
 
 
 def _log_voice_interaction(event: OMIEventRequest, response: OMIResponse) -> None:

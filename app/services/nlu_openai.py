@@ -17,6 +17,16 @@ def parse_intent_openai(request: OMIEventRequest) -> Dict[str, Any]:
     Returns:
         Dictionary with 'intent' and 'entities' keys.
     """
+    # Validate settings before use
+    if hasattr(settings, 'validate_required'):
+        settings.validate_required()
+    
+    if not settings.OPENAI_API_KEY:
+        raise ValueError(
+            "OPENAI_API_KEY environment variable is required. "
+            "Please set it in your Vercel project settings."
+        )
+    
     client = OpenAI(api_key=settings.OPENAI_API_KEY)
     
     system_prompt = """You are an intent parser for a voice inventory management system.
