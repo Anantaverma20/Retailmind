@@ -157,3 +157,7 @@ if handler is None:
     
     handler = basic_asgi_app
 
+# Export ASGI app for Vercel runtime (expects variable named `app`)
+# Alias `handler` to `app` for compatibility
+app = handler
+
