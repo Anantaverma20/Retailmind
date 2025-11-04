@@ -7,6 +7,21 @@ import os
 import traceback
 import json
 
+# Prevent Python from exiting on SystemExit during import
+# This is critical for Vercel serverless functions
+_original_excepthook = sys.excepthook
+
+def _safe_excepthook(exc_type, exc_value, exc_traceback):
+    """Prevent SystemExit from terminating the process during import."""
+    if exc_type is SystemExit:
+        # Convert SystemExit to a regular exception that we can catch
+        raise RuntimeError(f"SystemExit intercepted: {exc_value}") from exc_value
+    else:
+        _original_excepthook(exc_type, exc_value, exc_traceback)
+
+# Only intercept during import phase
+_sys_exit_intercepted = False
+
 # Add the project root to Python path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
@@ -31,17 +46,33 @@ try:
             
             mod = importlib.util.module_from_spec(spec)
             # Execute the module to load it - catch ALL exceptions including SystemExit
+            # Temporarily intercept sys.exit to prevent process termination
+            original_exit = sys.exit
+            def safe_exit(code=0):
+                """Intercept sys.exit() calls and convert to exceptions."""
+                raise RuntimeError(f"sys.exit({code}) called during module import")
+            
             try:
+                sys.exit = safe_exit
                 spec.loader.exec_module(mod)
             except SystemExit as sys_exit:
                 # SystemExit during import means something called sys.exit() or exit()
                 # This is often caused by missing dependencies or validation errors
                 import_error = ImportError(f"Module execution failed with SystemExit: {sys_exit.code}")
                 raise import_error
+            except RuntimeError as runtime_err:
+                # This might be from our intercepted sys.exit
+                if "sys.exit" in str(runtime_err):
+                    import_error = ImportError(f"Module tried to exit during import: {runtime_err}")
+                    raise import_error
+                raise
             except BaseException as base_exc:
                 # Catch everything including KeyboardInterrupt, SystemExit, etc.
                 import_error = ImportError(f"Module execution failed: {type(base_exc).__name__}: {base_exc}")
                 raise import_error
+            finally:
+                # Restore original sys.exit
+                sys.exit = original_exit
             
             # Get the FastAPI app instance
             if hasattr(mod, "app"):
