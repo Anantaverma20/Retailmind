@@ -457,11 +457,4 @@ Structured JSON logging using `structlog`. Logs include:
 - Check slowapi middleware is configured
 - Verify IP detection works behind proxies
 
-## License
-
-[Add license here]
-
-## Contributing
-
-[Add contributing guidelines here]
 
