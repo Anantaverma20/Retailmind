@@ -6,10 +6,21 @@ from datetime import datetime
 from fastapi import FastAPI, Request, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
 import structlog
+
+# Conditional imports for rate limiting (might not be available in all environments)
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+    SLOWAPI_AVAILABLE = True
+except ImportError:
+    # Rate limiting not available - create dummy classes
+    SLOWAPI_AVAILABLE = False
+    Limiter = None
+    _rate_limit_exceeded_handler = None
+    get_remote_address = None
+    RateLimitExceeded = Exception
 from app.config import settings
 from app.constants import (
     MAX_REQUEST_BODY_SIZE,
@@ -75,7 +86,7 @@ enable_rate_limiting = getattr(settings, "ENABLE_RATE_LIMITING", True) and not i
 
 rate_limit = f"{RATE_LIMIT_PER_MINUTE}/minute"
 limiter = None
-if enable_rate_limiting:
+if enable_rate_limiting and SLOWAPI_AVAILABLE:
     try:
         limiter = Limiter(key_func=get_remote_address)
         app.state.limiter = limiter
@@ -85,7 +96,10 @@ if enable_rate_limiting:
         logger.warning(f"Rate limiting disabled: {e}")
         limiter = None
 else:
-    logger.info("Rate limiting disabled (serverless environment or ENABLE_RATE_LIMITING=false)")
+    if not SLOWAPI_AVAILABLE:
+        logger.info("Rate limiting disabled (slowapi not available)")
+    else:
+        logger.info("Rate limiting disabled (serverless environment or ENABLE_RATE_LIMITING=false)")
 
 # Helper decorator for conditional rate limiting
 def rate_limit_decorator():
