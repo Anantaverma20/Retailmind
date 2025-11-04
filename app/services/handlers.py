@@ -95,22 +95,62 @@ async def handle_get_sales_summary(entities: Dict[str, Any]) -> Dict[str, Any]:
     
     try:
         window_days = entities.get("window_days", DEFAULT_SALES_WINDOW_DAYS)
-        start_date = (date.today() - timedelta(days=window_days)).isoformat()
         
-        response = supabase.table(TABLE_SALES).select("*").gte("sale_date", start_date).execute()
+        # Get the most recent sale date to work with relative dates
+        # This handles cases where data is from a different year
+        recent_sales = supabase.table(TABLE_SALES).select("sale_date").order("sale_date", desc=True).limit(1).execute()
+        
+        if recent_sales.data and recent_sales.data[0].get("sale_date"):
+            # Use the most recent sale date as the reference point
+            try:
+                latest_date_str = recent_sales.data[0].get("sale_date")
+                if isinstance(latest_date_str, str):
+                    # Handle both date strings and datetime strings
+                    date_part = latest_date_str.split("T")[0] if "T" in latest_date_str else latest_date_str
+                    latest_date = datetime.fromisoformat(date_part).date()
+                else:
+                    latest_date = latest_date_str
+                reference_date = latest_date
+            except (ValueError, AttributeError) as e:
+                logger.debug(f"Could not parse latest sale date: {e}")
+                # Fallback: try to get all sales and calculate from there
+                all_sales = supabase.table(TABLE_SALES).select("*").limit(1000).execute()
+                if all_sales.data:
+                    # Use the latest date from the fetched data
+                    dates = [datetime.fromisoformat(r.get("sale_date", "").split("T")[0]).date() 
+                            for r in all_sales.data if r.get("sale_date")]
+                    if dates:
+                        reference_date = max(dates)
+                    else:
+                        reference_date = date.today()
+                else:
+                    reference_date = date.today()
+        else:
+            # No sales data, use today as reference
+            reference_date = date.today()
+        
+        start_date = (reference_date - timedelta(days=window_days)).isoformat()
+        end_date = reference_date.isoformat()
+        
+        # Query sales within the date range
+        response = supabase.table(TABLE_SALES).select("*").gte("sale_date", start_date).lte("sale_date", end_date).execute()
         
         total_quantity = sum(row.get("quantity_sold", 0) for row in response.data)
         total_revenue = sum(float(row.get("revenue", 0) or 0) for row in response.data)
+        
+        logger.debug(f"Sales summary query: window={window_days} days, start={start_date}, end={end_date}, found={len(response.data)} rows")
         
         return {
             "total_quantity": total_quantity,
             "total_revenue": round(total_revenue, 2),
             "window_days": window_days,
             "transaction_count": len(response.data),
-            "start_date": start_date
+            "start_date": start_date,
+            "end_date": end_date
         }
     
     except Exception as e:
+        logger.error(f"Error in handle_get_sales_summary: {e}", exc_info=True)
         return handle_database_error(e, logger)
 
 

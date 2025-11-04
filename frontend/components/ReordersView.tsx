@@ -124,7 +124,7 @@ export function ReordersView() {
           <div className="space-y-3">
             {filteredReorders.map((reorder) => (
               <div
-                key={reorder.reorder_id}
+                key={reorder.reorder_id || reorder.task_id || `reorder-${reorder.product_id}`}
                 className="p-4 border rounded-lg hover:bg-gray-50 transition-colors"
               >
                 <div className="flex items-start justify-between">
@@ -139,7 +139,7 @@ export function ReordersView() {
                       {reorder.product_name || "Product"}
                     </p>
                     <p className="text-xs text-gray-500 mt-1">
-                      Quantity: {reorder.quantity} • Order ID: {reorder.reorder_id.slice(0, 8)}
+                      {reorder.quantity && `Quantity: ${reorder.quantity} • `}Order ID: {reorder.reorder_id ? reorder.reorder_id.slice(0, 8) : reorder.task_id ? reorder.task_id.slice(0, 8) : 'N/A'}
                     </p>
                     {reorder.purchase_order_id && (
                       <p className="text-xs text-gray-500 mt-1">
@@ -152,10 +152,10 @@ export function ReordersView() {
                       </p>
                     )}
                   </div>
-                  {reorder.created_at && (
+                  {(reorder.created_at || reorder.assigned_date) && (
                     <div className="text-right">
                       <p className="text-xs text-gray-400">
-                        {new Date(reorder.created_at).toLocaleDateString()}
+                        {new Date(reorder.created_at || reorder.assigned_date || '').toLocaleDateString()}
                       </p>
                     </div>
                   )}
