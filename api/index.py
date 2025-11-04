@@ -16,11 +16,19 @@ handler = None
 
 # Try to import and create the app with comprehensive error handling
 try:
-    # Import app - this will now handle missing env vars gracefully
-    from app import app
-    # Export the FastAPI app for Vercel
-    # Vercel Python runtime supports ASGI apps directly
-    handler = app
+    # Prefer loading the FastAPI app directly from the root app.py to avoid
+    # package/module name conflicts between `app.py` and the `app/` package.
+    import importlib.util
+    app_file = os.path.join(project_root, "app.py")
+    if os.path.exists(app_file):
+        spec = importlib.util.spec_from_file_location("main_app", app_file)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        handler = getattr(mod, "app")
+    else:
+        # Fallback to regular import (works locally)
+        from app import app as imported_app
+        handler = imported_app
 except ImportError as e:
     # Handle import errors (missing dependencies, module not found, etc.)
     try:
