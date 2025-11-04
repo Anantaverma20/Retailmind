@@ -1,5 +1,6 @@
 """FastAPI entry point for OMI Voice Inventory Assistant."""
 import logging
+import os
 import uuid
 from datetime import datetime
 from fastapi import FastAPI, Request, HTTPException, Depends, Header
@@ -67,11 +68,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Rate limiting
+# Rate limiting - optional for serverless environments
+# Auto-disable on Vercel (detected via VERCEL environment variable)
+is_vercel = os.getenv("VERCEL") == "1"
+enable_rate_limiting = getattr(settings, "ENABLE_RATE_LIMITING", True) and not is_vercel
+
 rate_limit = f"{RATE_LIMIT_PER_MINUTE}/minute"
-limiter = Limiter(key_func=get_remote_address)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+limiter = None
+if enable_rate_limiting:
+    try:
+        limiter = Limiter(key_func=get_remote_address)
+        app.state.limiter = limiter
+        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    except Exception as e:
+        # Rate limiting might not work in all serverless environments
+        logger.warning(f"Rate limiting disabled: {e}")
+        limiter = None
+else:
+    logger.info("Rate limiting disabled (serverless environment or ENABLE_RATE_LIMITING=false)")
+
+# Helper decorator for conditional rate limiting
+def rate_limit_decorator():
+    """Return rate limit decorator if limiter exists, otherwise no-op."""
+    if limiter:
+        return limiter.limit(rate_limit)
+    else:
+        # Return a no-op decorator
+        def noop_decorator(func):
+            return func
+        return noop_decorator
 
 
 # Authentication dependency
@@ -107,7 +132,6 @@ def _log_voice_interaction(event: OMIEventRequest, response: OMIResponse) -> Non
 
 
 @app.post("/omi/event", response_model=OMIResponse)
-@limiter.limit(rate_limit)
 async def omi_event(
     request: Request,
     event: OMIEventRequest,
@@ -151,7 +175,7 @@ async def omi_event(
 
 
 @app.post("/query_stock")
-@limiter.limit(rate_limit)
+@rate_limit_decorator()
 async def query_stock(
     request: Request,
     query: QueryStockRequest
@@ -167,7 +191,7 @@ async def query_stock(
 
 
 @app.post("/create_reorder")
-@limiter.limit(rate_limit)
+@rate_limit_decorator()
 async def create_reorder(
     request: Request,
     reorder: CreateReorderRequest
@@ -182,7 +206,7 @@ async def create_reorder(
 
 
 @app.post("/get_sales_summary")
-@limiter.limit(rate_limit)
+@rate_limit_decorator()
 async def get_sales_summary(
     request: Request,
     summary: SalesSummaryRequest
@@ -193,7 +217,7 @@ async def get_sales_summary(
 
 
 @app.post("/get_supplier_info")
-@limiter.limit(rate_limit)
+@rate_limit_decorator()
 async def get_supplier_info(
     request: Request,
     info: SupplierInfoRequest
@@ -207,7 +231,7 @@ async def get_supplier_info(
 
 
 @app.post("/get_delivery_status")
-@limiter.limit(rate_limit)
+@rate_limit_decorator()
 async def get_delivery_status(
     request: Request,
     status: DeliveryStatusRequest
@@ -221,7 +245,7 @@ async def get_delivery_status(
 
 
 @app.get("/reorders")
-@limiter.limit(rate_limit)
+@rate_limit_decorator()
 async def get_all_reorders(request: Request):
     """Get all reorder tasks (for frontend dashboard)."""
     try:
@@ -276,7 +300,7 @@ async def get_all_reorders(request: Request):
 
 
 @app.get("/voice_logs")
-@limiter.limit(rate_limit)
+@rate_limit_decorator()
 async def get_voice_logs(request: Request, limit: int = 50):
     """Get recent voice query examples (for frontend dashboard)."""
     try:

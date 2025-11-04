@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     ENABLE_SHOPIFY: bool = False
     ENABLE_QBO: bool = False
     ENABLE_AIRTABLE: bool = False
+    ENABLE_RATE_LIMITING: bool = True  # Can disable for serverless (auto-disabled on Vercel)
     
     class Config:
         env_file = ".env"
