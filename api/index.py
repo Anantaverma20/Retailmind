@@ -17,6 +17,7 @@ handler = None
 import_error = None
 
 # Try to import and create the app with comprehensive error handling
+# IMPORTANT: Catch ALL exceptions including SystemExit to prevent Python process exit
 try:
     # Method 1: Try direct import from app.py using importlib (avoids package conflicts)
     import importlib.util
@@ -29,34 +30,48 @@ try:
                 raise ImportError("Could not create spec from app.py")
             
             mod = importlib.util.module_from_spec(spec)
-            # Execute the module to load it
-            spec.loader.exec_module(mod)
+            # Execute the module to load it - catch ALL exceptions including SystemExit
+            try:
+                spec.loader.exec_module(mod)
+            except SystemExit as sys_exit:
+                # SystemExit during import means something called sys.exit() or exit()
+                # This is often caused by missing dependencies or validation errors
+                import_error = ImportError(f"Module execution failed with SystemExit: {sys_exit.code}")
+                raise import_error
+            except BaseException as base_exc:
+                # Catch everything including KeyboardInterrupt, SystemExit, etc.
+                import_error = ImportError(f"Module execution failed: {type(base_exc).__name__}: {base_exc}")
+                raise import_error
             
             # Get the FastAPI app instance
             if hasattr(mod, "app"):
                 handler = mod.app
+                # Verify it's actually a FastAPI app or callable
+                if not callable(handler):
+                    raise AttributeError("app.py defines 'app' but it is not callable (not a valid ASGI app)")
             else:
                 raise AttributeError("app.py does not define 'app' variable")
                 
-        except Exception as importlib_error:
+        except (ImportError, AttributeError, Exception, BaseException) as importlib_error:
             import_error = importlib_error
             # Fallback to regular import
             try:
                 # Import from app package (which now exposes app from app.py)
                 from app import app as imported_app
                 handler = imported_app
-            except ImportError as fallback_error:
+            except (ImportError, Exception, BaseException) as fallback_error:
                 # If both fail, we'll handle it below
                 import_error = fallback_error
     else:
         # app.py doesn't exist, try package import
-        from app import app as imported_app
-        handler = imported_app
+        try:
+            from app import app as imported_app
+            handler = imported_app
+        except (ImportError, Exception, BaseException) as pkg_error:
+            import_error = pkg_error
         
-except ImportError as e:
-    import_error = e
-    # Continue to error handling below
-except Exception as e:
+except (ImportError, Exception, BaseException) as e:
+    # Catch EVERYTHING including SystemExit, KeyboardInterrupt, etc.
     import_error = e
     # Continue to error handling below
 
@@ -167,7 +182,53 @@ if handler is None:
 
 # Export ASGI app for Vercel runtime
 # Vercel's @vercel/python expects a variable named `app` at module level
-app = handler
+# IMPORTANT: This must always be set, even if handler is None (it will be the error app)
+try:
+    app = handler if handler is not None else basic_asgi_app
+except NameError:
+    # If handler is None and basic_asgi_app wasn't defined, create a minimal one
+    async def minimal_fallback_app(scope, receive, send):
+        if scope["type"] == "http":
+            response_body = json.dumps({
+                "error": "Critical failure: No handler could be created",
+                "message": "The application could not be initialized. Check Vercel logs for details."
+            }).encode('utf-8')
+            await send({
+                'type': 'http.response.start',
+                'status': 500,
+                'headers': [
+                    [b'content-type', b'application/json'],
+                    [b'content-length', str(len(response_body)).encode()]
+                ],
+            })
+            await send({
+                'type': 'http.response.body',
+                'body': response_body,
+            })
+    app = minimal_fallback_app
 
 # Also export as handler for compatibility
 __all__ = ['app', 'handler']
+
+# Final safety check - ensure app is always callable
+if not callable(app):
+    # Last resort: create a minimal ASGI app
+    async def final_fallback_app(scope, receive, send):
+        if scope["type"] == "http":
+            response_body = json.dumps({
+                "error": "Critical: app variable is not callable",
+                "message": f"Expected ASGI app, got {type(app)}"
+            }).encode('utf-8')
+            await send({
+                'type': 'http.response.start',
+                'status': 500,
+                'headers': [
+                    [b'content-type', b'application/json'],
+                    [b'content-length', str(len(response_body)).encode()]
+                ],
+            })
+            await send({
+                'type': 'http.response.body',
+                'body': response_body,
+            })
+    app = final_fallback_app
