@@ -5,61 +5,80 @@ This file is required for Vercel to properly deploy FastAPI applications.
 import sys
 import os
 import traceback
+import json
+
+# CRITICAL: Prevent any process exit during import
+# Vercel's Python runtime will exit if any uncaught exception occurs
+_original_exit = sys.exit
+def _safe_exit(code=0):
+    """Intercept sys.exit to prevent process termination."""
+    raise RuntimeError(f"sys.exit({code}) called - preventing process termination")
 
 # Add the project root to Python path
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+try:
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+except Exception:
+    project_root = os.getcwd()
 
 # Initialize handler to None - will be set below
 handler = None
 import_error = None
 
-# Try to import and create the app with comprehensive error handling
+# Wrap EVERYTHING in try-except to prevent any exit
 try:
-    # Method 1: Try direct import from app.py using importlib (avoids package conflicts)
-    import importlib.util
-    app_file = os.path.join(project_root, "app.py")
+    # Temporarily intercept sys.exit
+    sys.exit = _safe_exit
     
-    if os.path.exists(app_file):
-        try:
-            spec = importlib.util.spec_from_file_location("main_app", app_file)
-            if spec is None or spec.loader is None:
-                raise ImportError("Could not create spec from app.py")
-            
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            
-            # Get the FastAPI app instance
-            if hasattr(mod, "app"):
-                handler = mod.app
-                # Verify it's actually a FastAPI app or callable
-                if not callable(handler):
-                    raise AttributeError("app.py defines 'app' but it is not callable (not a valid ASGI app)")
-            else:
-                raise AttributeError("app.py does not define 'app' variable")
-                
-        except Exception as importlib_error:
-            import_error = importlib_error
-            # Fallback to regular import
+    # Try to import and create the app with comprehensive error handling
+    try:
+        # Method 1: Try direct import from app.py using importlib
+        import importlib.util
+        app_file = os.path.join(project_root, "app.py")
+        
+        if os.path.exists(app_file):
             try:
-                # Import from app package (which now exposes app from app.py)
+                spec = importlib.util.spec_from_file_location("main_app", app_file)
+                if spec is None or spec.loader is None:
+                    raise ImportError("Could not create spec from app.py")
+                
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                
+                # Get the FastAPI app instance
+                if hasattr(mod, "app"):
+                    handler = mod.app
+                    if not callable(handler):
+                        raise AttributeError("app.py defines 'app' but it is not callable")
+                else:
+                    raise AttributeError("app.py does not define 'app' variable")
+                    
+            except Exception as importlib_error:
+                import_error = importlib_error
+                # Fallback to regular import
+                try:
+                    from app import app as imported_app
+                    handler = imported_app
+                except Exception as fallback_error:
+                    import_error = fallback_error
+        else:
+            # app.py doesn't exist, try package import
+            try:
                 from app import app as imported_app
                 handler = imported_app
-            except Exception as fallback_error:
-                # If both fail, we'll handle it below
-                import_error = fallback_error
-    else:
-        # app.py doesn't exist, try package import
-        try:
-            from app import app as imported_app
-            handler = imported_app
-        except Exception as pkg_error:
-            import_error = pkg_error
-        
-except Exception as e:
-    # Catch all exceptions
-    import_error = e
+            except Exception as pkg_error:
+                import_error = pkg_error
+    except Exception as e:
+        import_error = e
+    finally:
+        # Always restore sys.exit
+        sys.exit = _original_exit
+
+except Exception as critical_error:
+    # Even if everything above fails, we must create an app
+    import_error = critical_error
+    sys.exit = _original_exit
 
 # If import failed, create an error app that provides helpful information
 if handler is None or import_error is not None:
@@ -113,7 +132,6 @@ if handler is None or import_error is not None:
         
     except Exception as fallback_error:
         # If even FastAPI can't be imported, create a minimal ASGI app manually
-        import json
         async def minimal_asgi_app(scope, receive, send):
             """Minimal ASGI handler as last resort."""
             if scope["type"] == "http":
@@ -144,13 +162,13 @@ if handler is None or import_error is not None:
 # Ensure handler is always set
 if handler is None:
     # Last resort - create a basic ASGI handler
-    import json
     async def basic_asgi_app(scope, receive, send):
         """Basic ASGI handler when everything else fails."""
         if scope["type"] == "http":
             response_body = json.dumps({
                 "error": "Handler initialization completely failed",
-                "message": "No handler could be created. This indicates a critical configuration issue."
+                "message": "No handler could be created. This indicates a critical configuration issue.",
+                "traceback": traceback.format_exc()
             }, indent=2).encode('utf-8')
             
             await send({
@@ -170,7 +188,25 @@ if handler is None:
 
 # Export ASGI app for Vercel runtime
 # Vercel's @vercel/python expects a variable named `app` at module level
+# CRITICAL: This must ALWAYS be set, even if everything fails
 app = handler
 
 # Also export as handler for compatibility
 __all__ = ['app', 'handler']
+
+# Final verification - ensure app is callable
+if not callable(app):
+    # Absolute last resort
+    async def final_fallback_app(scope, receive, send):
+        if scope["type"] == "http":
+            response_body = json.dumps({
+                "error": "Critical: app variable is not callable",
+                "message": f"Expected ASGI app, got {type(app)}"
+            }).encode('utf-8')
+            await send({
+                'type': 'http.response.start',
+                'status': 500,
+                'headers': [[b'content-type', b'application/json']],
+            })
+            await send({'type': 'http.response.body', 'body': response_body})
+    app = final_fallback_app
