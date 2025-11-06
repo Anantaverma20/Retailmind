@@ -9,10 +9,5 @@
   "env": {
     "PYTHON_VERSION": "3.11",
     "ENABLE_RATE_LIMITING": "false"
-  },
-  "functions": {
-    "api/index.py": {
-      "maxDuration": 30
-    }
   }
 }
